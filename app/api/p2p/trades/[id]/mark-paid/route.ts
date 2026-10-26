@@ -19,14 +19,15 @@ function sniffExtension(buf: Buffer): "png" | "jpg" | "pdf" | null {
   return null;
 }
 
-const storageDir = () =>path.resolve(process.env.STORAGE_DIR ?? "./storage", "proofs");
+const storageDir = () => path.resolve(process.env.STORAGE_DIR ?? "./storage", "proofs");
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
+    const { id } = await params;
     const userId = await requireUserId();
     await enforceRateLimit(`mark-paid:${userId}`, 10, 60);
 
-    const trade = await getTradeIfParty(params.id, userId);
+    const trade = await getTradeIfParty(id, userId);
     if (!trade) throw new DomainError(404, "Trade no encontrado");
     if (trade.buyerId !== userId) throw new DomainError(403, "Solo el comprador puede marcar como pagado");
     if (trade.status !== "IN_ESCROW") throw new DomainError(409, "El trade no está esperando pago");

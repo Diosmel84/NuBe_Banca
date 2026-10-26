@@ -3,7 +3,7 @@
 import { BadgeCheck, Clock, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -34,24 +34,31 @@ export function MarketBoard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const res = await fetch(`/api/market?type=${side}`, { cache: "no-store" });
-    if (res.ok) setOrders(await res.json());
-  }, [side]);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    // `cancelled` descarta respuestas viejas si el usuario cambia de pestaña antes de que lleguen.
+    let cancelled = false;
+    fetch(`/api/market?type=${side}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: MarketOrder[] | null) => {
+        if (!cancelled && data) setOrders(data);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [side, reloadKey]);
 
   useEffect(() => {
     if (!session) return;
     const s = getSocket();
-    const onUpdate = () => void load();
+    const onUpdate = () => setReloadKey((k) => k + 1);
     s.on("market-updated", onUpdate);
     return () => {
       s.off("market-updated", onUpdate);
     };
-  }, [session, load]);
+  }, [session]);
 
   async function accept(order: MarketOrder) {
     if (!session) return router.push("/login");

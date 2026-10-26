@@ -1,15 +1,8 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { DomainError } from "@/lib/domain-error";
 
-export class DomainError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DomainError";
-  }
-}
+export { DomainError };
 
 /** Envuelve un handler: errores de dominio y validación salen limpios, el resto es 500 sin filtrar detalles. */
 export async function handle(fn: () => Promise<NextResponse>): Promise<NextResponse> {

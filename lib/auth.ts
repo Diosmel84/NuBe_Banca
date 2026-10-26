@@ -3,7 +3,7 @@ import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { z } from "zod";
-import { DomainError } from "@/lib/errors";
+import { DomainError } from "@/lib/domain-error";
 import { prisma } from "@/lib/prisma";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { verifyUserTotp } from "@/lib/totp";

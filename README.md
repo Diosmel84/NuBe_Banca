@@ -6,11 +6,11 @@ Marketplace P2P de **USDT (TRC20) ↔ ARS**. La plataforma **no toca pesos**: lo
 
 ## Stack
 
-Next.js 14 (App Router) · TypeScript strict · Tailwind + componentes shadcn/ui · Prisma + PostgreSQL · Socket.io (server custom) · NextAuth (Credentials + JWT) con 2FA TOTP · Redis (rate limit, anti-replay TOTP).
+Next.js 16 (App Router) · React 19 · TypeScript strict · Tailwind + componentes shadcn/ui · Prisma + PostgreSQL · Socket.io (server custom) · NextAuth (Credentials + JWT) con 2FA TOTP · Redis (rate limit, anti-replay TOTP).
 
 ## Levantar en local
 
-Requisitos: Node 20+, Docker.
+Requisitos: Node 22+, Docker.
 
 ```bash
 cp .env.example .env              # completar NEXTAUTH_SECRET y ENCRYPTION_MASTER_KEY
@@ -30,7 +30,41 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 Usuarios demo (solo dev): `juan@demo.test` (1000 USDT, verificado) y `comprador@demo.test` (50 USDT). Password: `JuanDemo2024!`.
 Probá el flujo con dos navegadores (o uno en incógnito).
 
-Producción: `npm run build && npm start`.
+Producción local: `npm run build && npm start`. `build` compila Next y además bundlea `server.ts` con esbuild en `dist/server.js`, así producción corre con `node` y no necesita `tsx`.
+
+## Deploy
+
+**No sirve Vercel ni ningún host serverless.** La app es un proceso Node que tiene que quedar prendido: Socket.io mantiene conexiones abiertas y el job de vencimiento corre con `setInterval`. Hace falta un host de contenedores: Railway, Render (plan pago), Fly.io o un VPS.
+
+El `Dockerfile` arma una imagen de producción que al arrancar:
+1. corre `prisma migrate deploy` (aplica solo las migraciones pendientes y no borra datos);
+2. levanta `node dist/server.js` en `$PORT` como usuario sin privilegios (`node`).
+
+Probarla local contra el Postgres y el Redis de `docker compose`:
+
+```bash
+docker build -t juan-p2p .
+docker run --rm -p 3000:3000 --env-file .env \
+  -e DATABASE_URL="postgresql://juan:juan_dev_password@host.docker.internal:5432/juan_p2p?schema=public" \
+  -e REDIS_URL="redis://host.docker.internal:6379" \
+  -e STORAGE_DIR=/data \
+  -v juan_p2p_proofs:/data juan-p2p
+```
+
+En **Git Bash (Windows)** anteponé `MSYS_NO_PATHCONV=1` al `docker run`. Si no, Git Bash convierte `/data` en una ruta de Windows y la subida de comprobantes falla.
+
+Los valores del `.env` van **sin comillas**: `docker --env-file` no las quita y las pasa literales (por ejemplo, `COMMISSION_RATE="0.008"` rompe el arranque).
+
+**Checklist para un host real (ej. Railway):**
+
+| Qué | Cómo |
+|---|---|
+| Postgres y Redis | Servicios administrados del host; copiar sus URLs a `DATABASE_URL` y `REDIS_URL`. |
+| Secretos | `NEXTAUTH_SECRET` y `ENCRYPTION_MASTER_KEY` **nuevos**, distintos de los de dev. Si se pierde `ENCRYPTION_MASTER_KEY`, el chat y los secretos 2FA guardados quedan ilegibles. |
+| `NEXTAUTH_URL` | La URL pública con `https://`. Con https, NextAuth usa la cookie `__Secure-`, que el socket ya reconoce. |
+| Comprobantes | Volumen persistente montado en `/data` (`STORAGE_DIR`). Sin volumen, se pierden en cada deploy. |
+| Instancias | **Una sola.** Socket.io no tiene adapter de Redis: con 2+ instancias, un evento emitido en una no llega a los sockets conectados a la otra. El job sí es seguro con varias. |
+| Seed | **No correrlo en producción**: crea usuarios con password conocida. |
 
 ## Flujo de un trade
 
@@ -100,11 +134,11 @@ Mismo puerto que Next (`server.ts`). El handshake se autentica con la cookie JWT
 - 2FA es opcional. Para producción conviene hacerlo obligatorio para publicar SELL y para liberar.
 - Rate limit de ventana fija: permite ráfagas en el borde entre ventanas.
 
-## ⚠️ Next.js 14 tiene advisories sin parche
+## Por qué Next 16 y no 14
 
-El spec pide Next 14. Al 2026-10, `npm audit` marca **critical** para toda la línea 14.x (la última es 14.2.35), y la única corrección es pasar a Next 16. Varias no aplican a este proyecto: no usa `next/image`, rewrites, Server Actions ni i18n. Pero hay una que sí: **"Unauthenticated RCE on windows-hosted servers" (GHSA-p293-qw3h-jr36)**.
-**No lo pongas en producción con Next 14.** Para dev local alcanza, pero antes de deployar hay que migrar a Next 15/16 (params async en route handlers, `next.config.ts`).
-`zod` 3.x también tiene un advisory high (GHSA-mrhx-c7xc-m3w5, memoria con colecciones grandes). Acá no se validan arrays, así que el impacto es bajo, pero se corrige con zod 4.
+El spec pedía Next 14, pero en 2026-10 toda la línea 14.x tiene advisories **critical** sin parche (incluido un RCE en servers Windows, GHSA-p293-qw3h-jr36). 15.5.x arrastra un PostCSS vulnerable. Con **Next 16.4.3 + zod 4**, `npm audit --omit=dev` da **0 vulnerabilidades**. Lo único que queda son 3 moderate en Tailwind 3, que solo corre en el build y no llega al runtime.
+
+Cambios de la migración: `params` async en route handlers y páginas, `middleware.ts` → `proxy.ts`, ESLint 9 con flat config, y `DomainError` separado en `lib/domain-error.ts`. Este último cambio fue necesario porque Next 16 no permite cargar `next/server` desde el server custom antes de inicializarse.
 
 ## Cambios respecto del spec
 
@@ -116,8 +150,10 @@ El spec pide Next 14. Al 2026-10, `npm audit` marca **critical** para toda la l�
 ## Estructura
 
 ```
-server.ts                  Next + Socket.io (auth del handshake, chat, rooms)
-middleware.ts              protege /trade, /orders, /settings
+server.ts                  Next + Socket.io (auth del handshake, chat, rooms) + job de vencimiento
+proxy.ts                   protege /trade, /orders, /settings
+Dockerfile                 imagen de producción (migra y arranca)
+lib/jobs/expire-trades.ts  cancela trades vencidos y devuelve el locked
 lib/escrow.ts              lógica de dinero: createOrder, acceptOrder, markPaid, releaseTrade, openDispute
 lib/crypto.ts              AES-256-GCM + HKDF, txHash simulado
 lib/totp.ts                2FA con anti-replay

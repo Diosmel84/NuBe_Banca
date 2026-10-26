@@ -10,8 +10,9 @@ import { verifyUserTotp } from "@/lib/totp";
 
 const schema = z.object({ totp: z.string().optional() });
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
+    const { id } = await params;
     const userId = await requireUserId();
     await enforceRateLimit(`release:${userId}`, 10, 60);
     const { totp } = schema.parse(await req.json().catch(() => ({})));
@@ -25,7 +26,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
 
     // releaseTrade valida vendedor + estado PAID de forma atómica.
-    const trade = await releaseTrade(params.id, userId);
+    const trade = await releaseTrade(id, userId);
     emitTradeUpdated(trade.id, "RELEASED", [trade.buyerId, trade.sellerId]);
     return NextResponse.json({ status: "RELEASED", commission: trade.commission.toFixed(2) });
   });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type P2PTrade } from "@prisma/client";
 import { fakeTronTxHash } from "@/lib/crypto";
-import { DomainError } from "@/lib/errors";
+import { DomainError } from "@/lib/domain-error";
 import { COMMISSION_RATE, Decimal, PAYMENT_WINDOW_MINUTES, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 

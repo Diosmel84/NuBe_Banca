@@ -7,10 +7,11 @@ import { DomainError, handle } from "@/lib/errors";
 
 const MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", pdf: "application/pdf" };
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
+    const { id } = await params;
     const userId = await requireUserId();
-    const trade = await getTradeIfParty(params.id, userId);
+    const trade = await getTradeIfParty(id, userId);
     if (!trade?.paymentProofUrl) throw new DomainError(404, "Comprobante no encontrado");
 
     // El nombre sale de lo que guardó el server en DB, nunca del query del request.

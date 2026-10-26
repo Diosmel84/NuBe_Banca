@@ -1,5 +1,5 @@
 import { redis } from "@/lib/redis";
-import { DomainError } from "@/lib/errors";
+import { DomainError } from "@/lib/domain-error";
 
 /**
  * Fixed window en Redis. Falla CERRADO: si Redis no responde, no dejamos
