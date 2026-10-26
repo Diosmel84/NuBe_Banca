@@ -5,6 +5,7 @@ import { decode } from "next-auth/jwt";
 import { Server, type Socket } from "socket.io";
 import { getTradeIfParty, MAX_MESSAGE_LENGTH, saveMessage } from "./lib/chat";
 import { DomainError } from "./lib/errors";
+import { startExpireTradesJob } from "./lib/jobs/expire-trades";
 import { enforceRateLimit } from "./lib/rate-limit";
 import { MARKET_ROOM, registerIo, userRoom } from "./lib/socket-emit";
 
@@ -79,5 +80,7 @@ app.prepare().then(() => {
 
   httpServer.listen(port, () => {
     console.log(`> Juan Mecánico P2P listo en http://localhost:${port} (${dev ? "dev" : "prod"})`);
+    // Se arranca después de registrar io, así los eventos de cancelación llegan por socket.
+    startExpireTradesJob();
   });
 });

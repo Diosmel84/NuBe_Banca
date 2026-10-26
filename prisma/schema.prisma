@@ -26,6 +26,8 @@ enum TradeStatus {
   PAID
   RELEASED
   DISPUTED
+  // Venció el plazo de pago sin PAID: el locked vuelve al vendedor (lib/jobs/expire-trades.ts).
+  CANCELLED
 }
 
 enum TransactionType {
@@ -112,6 +114,8 @@ model P2PTrade {
   @@index([buyerId])
   @@index([sellerId])
   @@index([orderId])
+  // Lo usa el job de vencimiento: trades IN_ESCROW más viejos que el plazo.
+  @@index([status, createdAt])
 }
 
 // Log contable inmutable: un trigger en Postgres bloquea UPDATE/DELETE

@@ -37,8 +37,11 @@ Producción: `npm run build && npm start`.
 ```
 Orden SELL (OPEN) ──accept──▶ Trade IN_ESCROW ──mark-paid──▶ PAID ──release──▶ RELEASED
                      │ usdtBalance→lockedBalance    │ comprobante        │ locked → comprador (−0.8%)
-                     └──────────── dispute (IN_ESCROW | PAID) ──────────▶ DISPUTED (fondos congelados)
+                     ├──────────── dispute (IN_ESCROW | PAID) ──────────▶ DISPUTED (fondos congelados)
+                     └── vence el plazo sin PAID (job) ──▶ CANCELLED (locked → vendedor, monto vuelve a la orden)
 ```
+
+- **Vencimiento:** el comprador tiene `PAYMENT_WINDOW_MINUTES` (30 por defecto) para marcar pagado. El plazo se impone en `mark-paid` mismo: pasado el límite devuelve 409 aunque el job todavía no haya corrido. El job (`lib/jobs/expire-trades.ts`) arranca con el server, corre cada `EXPIRE_JOB_INTERVAL_MS` (30 s), y por cada trade vencido: pasa a `CANCELLED`, mueve `lockedBalance → usdtBalance` del vendedor con un asiento `UNLOCK`, devuelve el monto a la orden (que vuelve a `OPEN`) y emite `trade-updated` + `market-updated`. Es idempotente: con varias instancias del server, cada trade se cancela una sola vez. Solo se cancelan trades `IN_ESCROW`; `PAID` y `DISPUTED` nunca vencen solos.
 
 - **Quién es vendedor:** en una orden `SELL` el maker vende y el taker compra. En una orden `BUY` es al revés: el taker es el vendedor y sus USDT son los que se bloquean.
 - **Tomas parciales:** `P2POrder.amount` es el monto **restante**. Cada `accept` lo decrementa. Cuando llega a 0 la orden pasa a `IN_ESCROW`, y a `RELEASED` cuando todos sus trades se liberaron.
@@ -90,7 +93,7 @@ Mismo puerto que Next (`server.ts`). El handshake se autentica con la cookie JWT
 
 - **El chat NO es end-to-end.** Viaja en claro por el socket (cifrado por TLS en producción) y se cifra al guardarlo. El server puede leerlo, igual que en Binance P2P, porque los operadores lo necesitan para resolver disputas.
 - **No hay resolución de disputas** ni panel de admin: un trade `DISPUTED` deja los USDT en `lockedBalance` hasta que alguien lo resuelva a mano en DB.
-- **No hay cancelación por timeout:** el timer de 30 min es solo visual. `TradeStatus` no tiene `CANCELLED` (según el spec), así que hace falta agregar ese estado más un job que devuelva el locked al vendedor.
+- **El comprador no puede cancelar a mano** antes del plazo: solo vence solo. Falta un endpoint `cancel` para el comprador (estilo Binance).
 - **No hay depósitos ni retiros reales.** El saldo inicial sale del seed (`DEPOSIT`).
 - **Sin cuenta de plataforma:** la comisión se descuenta al comprador y queda en el log, pero no se acredita en ninguna wallet de Juan.
 - `avgReleaseMinutes` se mide desde la creación del trade, no desde el `PAID`, porque el modelo no tiene `paidAt`.
@@ -108,6 +111,7 @@ El spec pide Next 14. Al 2026-10, `npm audit` marca **critical** para toda la l�
 - `User.passwordHash` y `User.createdAt`: sin hash no hay login seguro con NextAuth Credentials.
 - Relaciones Prisma, índices y `@db.Decimal(12,2)` en todos los montos (`totalArs` en `16,2`).
 - `P2POrder.amount` = monto restante, para soportar tomas parciales con `minLimit`/`maxLimit`.
+- `TradeStatus.CANCELLED` para trades vencidos sin pago.
 
 ## Estructura
 

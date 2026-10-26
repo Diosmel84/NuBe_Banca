@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/auth";
 import { getTradeIfParty } from "@/lib/chat";
 import { DomainError, handle } from "@/lib/errors";
-import { markPaid } from "@/lib/escrow";
+import { markPaid, paymentCutoff } from "@/lib/escrow";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { emitTradeUpdated } from "@/lib/socket-emit";
 
@@ -30,6 +30,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!trade) throw new DomainError(404, "Trade no encontrado");
     if (trade.buyerId !== userId) throw new DomainError(403, "Solo el comprador puede marcar como pagado");
     if (trade.status !== "IN_ESCROW") throw new DomainError(409, "El trade no está esperando pago");
+    // Chequeo previo para no guardar el archivo de un trade vencido; markPaid lo vuelve a validar atómicamente.
+    if (trade.createdAt <= paymentCutoff()) throw new DomainError(409, "Venció el plazo de pago");
 
     const form = await req.formData();
     const file = form.get("proof");

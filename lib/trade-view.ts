@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 export interface TradeView {
   id: string;
-  status: "IN_ESCROW" | "PAID" | "RELEASED" | "DISPUTED";
+  status: "IN_ESCROW" | "PAID" | "RELEASED" | "DISPUTED" | "CANCELLED";
   role: "buyer" | "seller";
   amount: string;
   totalArs: string;

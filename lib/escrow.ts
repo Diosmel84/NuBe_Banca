@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma, type P2PTrade } from "@prisma/client";
 import { fakeTronTxHash } from "@/lib/crypto";
 import { DomainError } from "@/lib/errors";
-import { COMMISSION_RATE, Decimal, round2 } from "@/lib/money";
+import { COMMISSION_RATE, Decimal, PAYMENT_WINDOW_MINUTES, round2 } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 
 /**
@@ -12,6 +12,9 @@ import { prisma } from "@/lib/prisma";
  */
 
 type Tx = Prisma.TransactionClient;
+
+/** Trades creados antes de este instante ya vencieron su plazo de pago. */
+export const paymentCutoff = (now = Date.now()) => new Date(now - PAYMENT_WINDOW_MINUTES * 60_000);
 
 async function walletOrThrow(tx: Tx, userId: string) {
   const w = await tx.wallet.findUnique({ where: { userId } });
@@ -129,11 +132,13 @@ export async function acceptOrder(orderId: string, takerId: string, requested?: 
 // ---------- Marcar pagado ----------
 
 export async function markPaid(tradeId: string, buyerId: string, proofUrl: string): Promise<P2PTrade> {
+  // El plazo lo impone esta condición, no el job: aunque el job todavía no haya
+  // pasado, un trade vencido ya no se puede marcar como pagado.
   const res = await prisma.p2PTrade.updateMany({
-    where: { id: tradeId, buyerId, status: "IN_ESCROW" },
+    where: { id: tradeId, buyerId, status: "IN_ESCROW", createdAt: { gt: paymentCutoff() } },
     data: { status: "PAID", paymentProofUrl: proofUrl },
   });
-  if (res.count !== 1) throw new DomainError(409, "Solo el comprador puede marcar como pagado un trade en escrow");
+  if (res.count !== 1) throw new DomainError(409, "No se puede marcar como pagado: el trade no está en escrow o venció el plazo");
   return prisma.p2PTrade.findUniqueOrThrow({ where: { id: tradeId } });
 }
 
@@ -193,11 +198,58 @@ export async function releaseTrade(tradeId: string, sellerId: string): Promise<P
     // Si la orden quedó consumida y no le quedan trades activos, se cierra.
     const order = await tx.p2POrder.findUniqueOrThrow({ where: { id: trade.orderId } });
     if (order.amount.isZero()) {
-      const active = await tx.p2PTrade.count({ where: { orderId: order.id, status: { not: "RELEASED" } } });
+      const active = await tx.p2PTrade.count({ where: { orderId: order.id, status: { notIn: ["RELEASED", "CANCELLED"] } } });
       if (active === 0) await tx.p2POrder.update({ where: { id: order.id }, data: { status: "RELEASED" } });
     }
     return trade;
   });
+}
+
+// ---------- Vencimiento del plazo de pago ----------
+
+/**
+ * Cancela un trade IN_ESCROW vencido: locked -> usdtBalance del vendedor (UNLOCK)
+ * y el monto vuelve a la orden. Devuelve null si el trade ya no califica
+ * (lo pagaron, lo disputaron u otra instancia del job lo canceló antes).
+ */
+export async function cancelExpiredTrade(tradeId: string): Promise<P2PTrade | null> {
+  return prisma.$transaction(async (tx) => {
+    const moved = await tx.p2PTrade.updateMany({
+      where: { id: tradeId, status: "IN_ESCROW", createdAt: { lte: paymentCutoff() } },
+      data: { status: "CANCELLED" },
+    });
+    if (moved.count !== 1) return null;
+    const trade = await tx.p2PTrade.findUniqueOrThrow({ where: { id: tradeId } });
+    const { amount, sellerId } = trade;
+
+    const unlocked = await tx.wallet.updateMany({
+      where: { userId: sellerId, lockedBalance: { gte: amount } },
+      data: { lockedBalance: { decrement: amount }, usdtBalance: { increment: amount } },
+    });
+    if (unlocked.count !== 1) throw new Error(`Inconsistencia de escrow: locked insuficiente en trade ${tradeId}`);
+    const sellerWallet = await walletOrThrow(tx, sellerId);
+    await tx.transaction.create({
+      data: { userId: sellerId, type: "UNLOCK", amount, balanceAfter: sellerWallet.usdtBalance, referenceId: tradeId },
+    });
+
+    // El monto vuelve a estar disponible en la orden (salvo que el maker la haya cancelado).
+    await tx.p2POrder.updateMany({
+      where: { id: trade.orderId, status: { in: ["OPEN", "IN_ESCROW"] } },
+      data: { amount: { increment: amount }, status: "OPEN" },
+    });
+    return trade;
+  });
+}
+
+/** IDs de trades IN_ESCROW con el plazo vencido, más viejos primero. */
+export async function findExpiredTradeIds(limit = 100): Promise<string[]> {
+  const rows = await prisma.p2PTrade.findMany({
+    where: { status: "IN_ESCROW", createdAt: { lte: paymentCutoff() } },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+  return rows.map((r) => r.id);
 }
 
 // ---------- Disputa ----------

@@ -16,6 +16,7 @@ const STATUS: Record<TradeView["status"], { label: string; variant: BadgeProps["
   PAID: { label: "Pagado", variant: "secondary", help: "El comprador informó el pago. El vendedor verifica y libera." },
   RELEASED: { label: "Liberado", variant: "success", help: "Operación completada. USDT acreditados al comprador." },
   DISPUTED: { label: "En disputa", variant: "destructive", help: "Fondos congelados. Un operador de Juan revisa el caso." },
+  CANCELLED: { label: "Cancelado", variant: "outline", help: "Venció el plazo de pago. Los USDT volvieron al saldo del vendedor. Si ya transferiste, abrí un reclamo con soporte." },
 };
 
 function useCountdown(deadlineIso: string, active: boolean) {
@@ -144,6 +145,7 @@ export function TradeRoom({ initial }: { initial: TradeView }) {
                 <div>
                   <div className="text-xs uppercase text-muted-foreground">Tiempo para pagar</div>
                   <div className={cn("font-mono text-2xl font-black", timer.expired ? "text-destructive" : "text-primary")}>{timer.text}</div>
+                  {timer.expired && <div className="text-xs text-destructive">Plazo vencido: el trade se cancela automáticamente.</div>}
                 </div>
               </div>
             )}
@@ -253,7 +255,7 @@ export function TradeRoom({ initial }: { initial: TradeView }) {
           <div ref={bottomRef} />
         </div>
         <div className="space-y-2 border-t p-3">
-          {isBuyer && trade.status === "IN_ESCROW" && (
+          {isBuyer && trade.status === "IN_ESCROW" && !timer.expired && (
             <>
               <input
                 ref={fileRef}
