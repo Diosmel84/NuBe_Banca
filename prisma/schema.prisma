@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderType {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  OPEN
+  IN_ESCROW
+  PAID
+  RELEASED
+  DISPUTED
+  CANCELLED
+}
+
+enum TradeStatus {
+  IN_ESCROW
+  PAID
+  RELEASED
+  DISPUTED
+}
+
+enum TransactionType {
+  LOCK
+  UNLOCK
+  DEPOSIT
+  WITHDRAWAL
+  TRADE
+  COMMISSION
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  alias             String   @unique
+  // Agregado al spec: sin hash de password no hay login seguro.
+  passwordHash      String
+  dniVerified       Boolean  @default(false)
+  reputation        Float    @default(5.0)
+  completedTrades   Int      @default(0)
+  avgReleaseMinutes Int      @default(0)
+  // Cifrado con AES-256-GCM (lib/crypto.ts), nunca en texto plano.
+  twoFASecret       String?
+  isJuanVerified    Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  wallet       Wallet?
+  orders       P2POrder[]
+  buyTrades    P2PTrade[]    @relation("TradeBuyer")
+  sellTrades   P2PTrade[]    @relation("TradeSeller")
+  transactions Transaction[]
+  messages     ChatMessage[]
+}
+
+model Wallet {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id])
+  usdtBalance   Decimal  @default(0) @db.Decimal(12, 2)
+  lockedBalance Decimal  @default(0) @db.Decimal(12, 2)
+  updatedAt     DateTime @updatedAt
+}
+
+model P2POrder {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  type          OrderType
+  // Monto RESTANTE disponible para tomar (se decrementa con cada trade).
+  amount        Decimal     @db.Decimal(12, 2)
+  pricePerUsdt  Decimal     @db.Decimal(12, 2)
+  paymentMethod String
+  status        OrderStatus @default(OPEN)
+  // Límites por trade, expresados en USDT.
+  minLimit      Decimal?    @db.Decimal(12, 2)
+  maxLimit      Decimal?    @db.Decimal(12, 2)
+  createdAt     DateTime    @default(now())
+
+  trades P2PTrade[]
+
+  @@index([status, type])
+  @@index([userId])
+}
+
+model P2PTrade {
+  id              String      @id @default(cuid())
+  orderId         String
+  order           P2POrder    @relation(fields: [orderId], references: [id])
+  buyerId         String
+  buyer           User        @relation("TradeBuyer", fields: [buyerId], references: [id])
+  sellerId        String
+  seller          User        @relation("TradeSeller", fields: [sellerId], references: [id])
+  amount          Decimal     @db.Decimal(12, 2)
+  totalArs        Decimal     @db.Decimal(16, 2)
+  status          TradeStatus @default(IN_ESCROW)
+  escrowTxHash    String?
+  paymentProofUrl String?
+  chatRoomId      String      @unique
+  commission      Decimal     @db.Decimal(12, 2)
+  createdAt       DateTime    @default(now())
+
+  messages ChatMessage[]
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([orderId])
+}
+
+// Log contable inmutable: un trigger en Postgres bloquea UPDATE/DELETE
+// (ver prisma/migrations/*_init/migration.sql).
+model Transaction {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id])
+  type         TransactionType
+  amount       Decimal         @db.Decimal(12, 2)
+  balanceAfter Decimal         @db.Decimal(12, 2)
+  referenceId  String?
+  createdAt    DateTime        @default(now())
+
+  @@index([userId])
+}
+
+model ChatMessage {
+  id               String   @id @default(cuid())
+  tradeId          String
+  trade            P2PTrade @relation(fields: [tradeId], references: [id])
+  senderId         String
+  sender           User     @relation(fields: [senderId], references: [id])
+  // base64(ciphertext || authTag), AES-256-GCM
+  encryptedContent String
+  iv               String
+  createdAt        DateTime @default(now())
+
+  @@index([tradeId, createdAt])
+}
